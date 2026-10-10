@@ -19,8 +19,6 @@
 
 ## 配置
 
-脚本开头有个 CONFIG，按需修改：
-
 ```js
 const CONFIG = {
   blockIdleStudy:    true,   // 学习页：不让空闲退出计时器生效
