@@ -1,0 +1,5 @@
+# 让 raw 文件在各平台都保持 LF（油猴从 raw 链接安装时更稳）
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

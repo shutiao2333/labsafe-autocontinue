@@ -1,0 +1,13 @@
+{
+  "name": "labsafe-autocontinue",
+  "version": "1.0.0",
+  "private": true,
+  "author": "shutiao2333",
+  "description": "Userscript: neutralize the lab-safety platform's idle-exit timer and show the server-side study time.",
+  "scripts": {
+    "test": "node tests/test-labsafe.js labsafe.user.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.2"
+  }
+}
