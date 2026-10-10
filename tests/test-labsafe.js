@@ -31,10 +31,12 @@ const IDLE_STUDY = "function () { t.timer && clearInterval(t.timer), " +
   "t.showNOoperated = !0 }";
 const IDLE_OUTTIMER = "function () { t.outTime--, t.outTime == 0 && (clearInterval(t.outtimer), t.$router.back()) }";
 const IDLE_EXAM = "function (t) { 5 <= (new Date().getTime() - t.lastAnswerTime) / 6e4 && (t.showextra = !0, t.outTimespace = 8) }";
-const STUDY_TICK = "function () { t.timer2++, t.studyLength++ }";         // 学习秒表：必须不受影响
+const STUDY_TICK = "function () { window.__tick = (window.__tick || 0) + 1; /* study tick: t.timer2++ t.studyLength++ */ }";
 const NOISE = "function () { window.__noise = (window.__noise || 0) + 1 }";  // 无关短延时
 // 源码里带空闲特征、但调用时不做任何事：用来验证"延时不在 1min~60min 区间就不拦"
 const MARKED_NOOP = "function () { /* showNOoperated outTime */ }";
+// 同理：源码带考试页特征但调用时什么都不做（用来验证 blockIdleExam=false 时放行）
+const EXAM_MARKED_NOOP = "function () { /* showextra isTimeOut */ }";
 
 const PAGE_HTML = `
   <div id="app">
@@ -80,7 +82,7 @@ function makeDom(opts) {
   opts = opts || {};
   const dom = new JSDOM(`<!doctype html><html><head><meta charset="utf-8"><title>实验室安全教育平台</title></head>` +
     `<body>${opts.html || PAGE_HTML}</body></html>`, {
-    url: 'https://example.edu.cn/lab-study-front/security/safetyknowledgeDetial/167/4/0',
+    url: opts.url || 'https://example.edu.cn/lab-study-front/security/safetyknowledgeDetial/167/4/0',
     runScripts: 'dangerously', pretendToBeVisual: true
   });
   const w = dom.window;
@@ -102,7 +104,7 @@ function makeDom(opts) {
       }
     }
   };
-  w.document.querySelector('#chingo').__vue__ = vm;
+  if (vm.$el) vm.$el.__vue__ = vm;                                 // 夹具里没有 #chingo 时不挂（负例用）
 
   const clicks = [];                                        // 记录所有按钮点击（含脚本启动时自动点的）
   w.document.addEventListener('click', function (ev) {
@@ -131,7 +133,7 @@ function makeDom(opts) {
   const w = X.w;
 
   check('脚本已加载（window.__labSafe 存在）', !!X.api, typeof X.api);
-  check('页面上下文 agent 已注入', w.__labSafeAgent === '1.0.0', w.__labSafeAgent);
+  check('页面上下文 agent 已注入', w.__labSafeAgent === 'labsafe-agent-1', w.__labSafeAgent);
 
   const before = X.rec.st.length;
   const id1 = w.setTimeout(w.eval('(' + IDLE_STUDY + ')'), 60 * 5 * 1000);
@@ -165,7 +167,7 @@ function makeDom(opts) {
   check('能造出"关闭考试页"的变体用于测试', noExam !== SCRIPT);
   const Y = makeDom({ script: noExam });
   await sleep(80);
-  const idExamI2 = Y.w.setInterval(Y.w.eval('(' + IDLE_EXAM + ')'), 5000);
+  const idExamI2 = Y.w.setInterval(Y.w.eval('(' + EXAM_MARKED_NOOP + ')'), 5000);
   check('blockIdleExam=false 时考试页计时器放行', idExamI2 !== 0 && !!idExamI2, 'id=' + idExamI2);
   const idStudy2 = Y.w.setTimeout(Y.w.eval('(' + IDLE_STUDY + ')'), 300000);
   check('blockIdleExam=false 时学习页仍然被拦', idStudy2 === 0, 'id=' + idStudy2);
@@ -343,6 +345,27 @@ function makeDom(opts) {
   F.api.fetchReal();
   await sleep(120);
   check('沙箱环境下仍能经页面 agent 取到值（4321 → 01:12:01）', F.rowText() === '01:12:01', F.rowText());
+
+  /* ═════ 10. 运行时门槛（@include 匹配放宽后的护栏） ═════ */
+  console.log('\n【10】运行时门槛：不是本平台就什么都不做');
+  const N = makeDom({ url: 'https://example.com/some/other/page', html: '<div id="nothing">nothing here</div>', inject: true });
+  await sleep(150);
+  check('非本平台页面：不注入 agent', !N.w.__labSafeAgent, String(N.w.__labSafeAgent));
+  check('非本平台页面：不建日志面板', !N.$('#labSafeDock'));
+  check('非本平台页面：不插右侧行', !N.$('#labSafeRealRow'));
+  const noiseId = N.w.setTimeout(N.w.eval('(' + NOISE + ')'), 300000);
+  check('非本平台页面：无关定时器照常', noiseId !== 0 && !!noiseId, 'id=' + noiseId);
+
+  // 走学校 VPN 代理的地址（路径前面多一截）——正是 @include 放宽后要覆盖的场景
+  const V = makeDom({ url: 'https://clientvpn.example.edu.cn/https/webvpn1a2b3c/lab-study-front/routine-exam/7?examRequestId=x',
+                      onAjax: (o) => o.success({ totalStudyLength: 60 }) });
+  await sleep(150);
+  check('VPN 前缀地址：门槛通过并注入 agent', !!V.w.__labSafeAgent);
+  check('VPN 前缀地址：面板建好了', !!V.$('#labSafeDock'), 'dock=' + !!V.$('#labSafeDock'));
+  const vIdle = V.w.setTimeout(V.w.eval('(' + IDLE_STUDY + ')'), 300000);
+  check('VPN 前缀地址：空闲计时器照样被拦', vIdle === 0, 'id=' + vIdle);
+  check('启动日志写明识别依据', /识别依据=地址/.test(V.api.LOGS.join('\n')),
+    V.api.LOGS.slice(0, 2).join(' | '));
 
   console.log('\n===== PASS ' + pass + ' / FAIL ' + fail + ' =====');
   process.exit(fail ? 1 : 0);

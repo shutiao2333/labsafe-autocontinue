@@ -115,3 +115,17 @@ DOM 属性传 JSON 字符串（属性名 + 自定义事件），对象不跨世�
   日期方向写反这种错在服务器上是致命的，却很容易在测试里静默通过。
 - 节流逻辑用假时钟（`w.Date.now = () => fakeNow`），断言累计请求数，
   免得页面自身的轮询和手动调用互相干扰导致 flaky。
+
+## 9. 匹配范围与运行时门槛
+
+一开始只用 @match 覆盖域名根路径下的 /lab-study-front/、/lab-platform/、/cg-exam/。
+看真实院校地址后发现两类挂法匹配不到：走学校 webvpn 代理的地址（路径前面多一截，例如
+https://clientvpn.<校>.edu.cn/https/webvpn<hex>/lab-study-front/routine-exam/7?...），
+以及把应用挂在子目录下的。原因是 match pattern 从路径开头对齐，做不了"包含匹配"。
+
+改成 @include 通配（*lab-study-front* 等）后覆盖面够了，但会命中任何地址里含这串字符的页面，
+所以配了一道运行时门槛：注入后先看地址，再看页面结构（#chingo / .positionRight / .person-wrap），
+最后看页面上有没有带 commonMethods.emitAjax 的 Vue 实例，三者都不中就什么都不做。
+
+定时器补丁本身是自限的（只拦源码带空闲特征、且延时落在 1 分钟到 1 小时之间的回调），
+所以宽匹配不会误伤无关页面；需要门槛的是面板、agent 注入、右侧新行这些 UI 动作。

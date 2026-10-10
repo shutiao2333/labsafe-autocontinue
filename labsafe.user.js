@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         实验室安全教育平台 · 自动继续学习 + 实时已学时长
 // @namespace    https://github.com/shutiao2333/labsafe-autocontinue
-// @version      1.0.0
-// @description  ① 屏蔽本平台的"空闲 N 分钟自动退出"机制（学习页与考试/练习页，考试页可用 CONFIG.blockIdleExam=false 单独关闭）——让空闲计时器压根不排程，而不是等弹窗出现再点；② 在学习页右侧"已用时"旁显示服务器端累计学习时长（含自动换数据源）；③ 右下角「LabSafe 日志」诊断面板（自检/复制/下载）。
+// @version      1.1.0
+// @description  适用任意部署本平台的院校（地址里带 lab-study-front / cg-exam / lab-platform 即生效，包括走学校 VPN 代理的地址）。① 屏蔽本平台的"空闲 N 分钟自动退出"机制（学习页与考试/练习页，考试页可用 CONFIG.blockIdleExam=false 单独关闭）——让空闲计时器压根不排程，而不是等弹窗出现再点；② 在学习页右侧"已用时"旁显示服务器端累计学习时长（含自动换数据源）；③ 右下角「LabSafe 日志」诊断面板（自检/复制/下载）。
 // @author       shutiao2333
-// @match        *://*/lab-study-front/*
-// @match        *://*/lab-platform/*
-// @match        *://*/cg-exam/*
+// @include      *lab-study-front*
+// @include      *lab-platform*
+// @include      *cg-exam*
 // @run-at       document-start
 // @license      MIT
 // @grant        none
@@ -144,6 +144,9 @@
   //   学习页回调含 showNOoperated / outtimer / outTime / NoOperationTime
   //   考试页回调含 showextra / outTimespace / isTimeOut
   // 这些是 Vue 组件 data 的属性名，压缩混淆后依然保留，因此可以据此精确识别。
+  // 产品页面判定用的路径特征（@include 放宽后，靠它 + 运行时门槛兜住误注入）
+  const PLATFORM_PATH = /lab-study-front|lab-platform|cg-exam/i;
+
   const STUDY_MARK = /showNOoperated|outtimer|NoOperationTime|自动退出|是否继续/;
   const EXAM_MARK  = /showextra|outTimespace|isTimeOut|未进行答题|退出考试页面/;
 
@@ -464,7 +467,7 @@
   const AGENT_SRC = '(' + function (cfg) {
     if (window.__labSafeAgent) return;
     cfg = cfg || {};
-    window.__labSafeAgent = '1.0.0';
+    window.__labSafeAgent = 'labsafe-agent-1';
     var ID = 'labSafeBridge', REQ = 'labsafe-bridge-req', RES = 'labsafe-bridge-res';
 
     // ① 顺手在页面世界打上空闲定时器补丁（沙箱里的补丁打不到这里，这里才是真正生效的）
@@ -572,7 +575,8 @@
     try { if (PAGE && PAGE.__labSafeAgent) return true; } catch (e) { /* ignore */ }
     return false;
   }
-  injectAgent();                       // 尽早注入（agent 自身幂等，boot() 里会再确认一次）
+  // 地址像本平台才尽早注入（此刻 DOM 还没解析，只能用地址判断）；其余情况等 boot() 过门槛后再注入
+  if (PLATFORM_PATH.test(location.pathname) || PLATFORM_PATH.test(location.hash)) injectAgent();
 
   let bridgeBusy = false, bridgeSeq = 0, bridgeDead = false, bridgeFail = 0, pendingBridge = null;
   let srcIdx = 0, payloadIdx = 0, fallbackPolls = 0;           // 当前试到第几个数据源 / 第几种参数 / 备用源已轮询次数
@@ -934,13 +938,33 @@
   }
 
   /* ================= 启动 ================= */
-  function boot() {
+  // 运行时门槛：@include 的匹配故意放宽（连"路径前面多一截"的 VPN 代理地址也要覆盖），
+  // 所以注入后先确认"这确实是这套平台"再动手，不像就什么都不做。
+  function whyPlatform() {
+    try {
+      if (PLATFORM_PATH.test(location.pathname) || PLATFORM_PATH.test(location.hash)) return '地址';
+    } catch (e) { /* ignore */ }
+    try {
+      if (document.querySelector('#chingo, .positionRight, .person-wrap')) return '页面结构';
+    } catch (e) { /* ignore */ }
+    return anyVue() ? 'Vue 实例' : '';          // 最后手段：页面上有带 emitAjax 的实例
+  }
+
+  let bootTries = 10;                           // SPA 可能先给个空壳，给它 10 次机会（约 15 秒）
+  function arm() {
+    const why = whyPlatform();
+    if (why) { boot(why); return; }
+    if (--bootTries > 0) nativeSetTimeout.call(window, arm, 1500);
+    else log('页面不像本平台，脚本不做任何事');
+  }
+
+  function boot(why) {
     scanModals();
 
     // ⓿ 页面内日志面板（右下角按钮）+ 注入页面上下文 agent
     try { ensureUI(); } catch (e) { /* ignore */ }
     const injected = injectAgent();
-    note('脚本启动 · ' + REALM + ' · agent 注入' + (injected ? '成功' : '失败'));
+    note('脚本启动 · ' + REALM + ' · agent 注入' + (injected ? '成功' : '失败') + ' · 识别依据=' + (why || '?'));
     note('日志面板已就绪：点右下角「LabSafe 日志」→「自检」可看完整诊断');
 
     // ① 监听 DOM 变化：弹窗插入时立刻处理（比轮询快）
@@ -966,9 +990,9 @@
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
+    document.addEventListener('DOMContentLoaded', arm, { once: true });
   } else {
-    boot();
+    arm();
   }
 
   // 调试用（沙箱里一份；Firefox 下再尽力导出一份到页面本体，方便在 DevTools 控制台直接用）
